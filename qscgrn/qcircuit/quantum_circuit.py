@@ -4,6 +4,7 @@ from .utils import *
 from .gates import *
 from ..run import *
 from ..utils import info_print
+from .gates import cnot_gate
 
 
 __all__ = ['quantum_circuit']
