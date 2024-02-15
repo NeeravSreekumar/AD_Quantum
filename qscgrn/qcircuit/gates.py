@@ -61,6 +61,8 @@ def der_ry_gate(theta):
                            [cos, -sin]])
 
 
+import numpy as np
+
 def cnot_gate(control, target):
     """
     Computes the matrix transformation for the `CNOT` gate.
@@ -80,5 +82,6 @@ def cnot_gate(control, target):
     T[0, 0] = 1
     T[1, 1] = 1
     T[2, 3] = 1
-    T[3, 2] = 1 if control == 0 and target == 1 else 0  # Apply NOT if control qubit is 1
+    T[3, 2] = 1
     return T
+
