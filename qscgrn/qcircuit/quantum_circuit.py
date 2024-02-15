@@ -167,17 +167,124 @@ class quantum_circuit(qscgrn_model):
         Computes the transformation matrices of each gate in `L_k`
         layer and saves the result into self.regulation
         """
-        arr = np.zeros((len(self.edges),
-                        2**self.ngenes, 2**self.ngenes))
+        arr = np.zeros((len(self.edges), 2**self.ngenes, 2**self.ngenes))
 
         for i, edge in enumerate(self.edges):
             idx = self.indexes[i]
-            # Decompose C-RY gate into CNOT and rotation gates
-            arr[i] = cnot_gate(idx[0], idx[1]).dot(ry_gate(self.theta[edge]))
+            control, target = idx[0], idx[1]
+            theta_edge = self.theta[edge]
+
+            # Decompose the controlled-Ry gate into CNOT and rotation gates
+            cnot = cnot_gate(control, target)
+            rotation = ry_gate(theta_edge)
+            arr[i] = np.dot(cnot, rotation)
 
         self.regulation = arr
 
     def generate_circuit(self):
         """
         Computes the `L_enc` and `L_k` accordingly to parameters
-        such as `theta` and edges
+        such as `theta` and edges.
+        """
+        self.circuit = False
+        self.compute_encoder()
+        self.compute_regulation()
+        self.circuit = True
+
+    def transform_matrix(self):
+        """
+        Computes the transformation matrix for the quantum circuit
+        once `L_enc` and `L_k` are computed.
+        Returns
+        -------
+        T : ndarray
+            The transformation matrix for the whole quantum circuit.
+        """
+        self._circuit_is_empty()
+        transform_regulation = matrix_multiplication(self.regulation)
+        transform_encoder = tensor_product(self.encoder)
+        return np.dot(transform_regulation, transform_encoder)
+
+    def output_state(self):
+        """
+        Computes the quantum state in the output register of the
+        quantum circuit given an input state.
+        Returns
+        -------
+        state : ndarray
+            The quantum state in the output register.
+        """
+        self._circuit_is_empty()
+        T = self.transform_matrix()
+        return np.dot(T, self.input)
+
+    def output_probabilities(self, drop_zeros=True):
+        """
+        Computes the probability distribution in the output register
+        of the quantum circuit.
+        If drop_zeros is True, a normalization step is done.
+        Parameters
+        ----------
+        drop_zeros : bool, optional
+            If True, the output probabilities are normalized such
+            that the |0>_n state is set to 0.
+        Returns
+        -------
+        probabilities : ndarray
+            The probability distribution in the output register.
+        """
+        state = self.output_state()
+        probabilities = np.abs(state)**2
+
+        if drop_zeros:
+            probabilities[0] = 0
+            probabilities /= probabilities.sum()
+
+        return probabilities
+
+    def create_derivatives(self):
+        """
+        Creates a pd.DataFrame to store the derivatives of the
+        output state with respect to the parameters.
+        """
+        self._der_is_not_empty()
+        self.derivatives = pd.DataFrame(index=self.genes)
+
+    def der_encoder(self):
+        """
+        Computes the derivatives with respect to the parameters
+        in the `L_enc` layer.
+        """
+        self._circuit_is_empty()
+        self._der_is_empty()
+
+        for idx, gene in enumerate(self.genes):
+            self.derivatives[gene] = np.dot(self.encoder[idx], self.input)
+
+    def der_regulation(self):
+        """
+        Computes the derivatives with respect to the parameters
+        in the `L_k` layers.
+        """
+        self._circuit_is_empty()
+        self._der_is_empty()
+
+        for i, edge in enumerate(self.edges):
+            idx = self.indexes[i]
+            control, target = idx[0], idx[1]
+            theta_edge = self.theta[edge]
+
+            cnot = cnot_gate(control, target)
+            der_cnot = np.zeros_like(cnot)
+            rotation = ry_gate(theta_edge)
+            der_rotation = der_ry_gate(theta_edge)
+
+            self.derivatives[edge] = np.dot(der_cnot, rotation) + np.dot(cnot, der_rotation)
+
+    def compute_derivatives(self):
+        """
+        Computes the derivatives by calling the der_encoder
+        and the der_regulation methods.
+        """
+        self.der_encoder()
+        self.der_regulation()
