@@ -6,29 +6,6 @@ from ..run import *
 from ..utils import info_print
 from qscgrn.qcircuit import cnot_gate, ry_gate
 
-import numpy as np
-
-def cnot_gate(control, target):
-    """
-    Computes the matrix transformation for the `CNOT` gate.
-    `T = CNOT`.
-    Parameters
-    ----------
-    control : int
-        The control qubit index.
-    target : int
-        The target qubit index.
-    Returns
-    -------
-    T : ndarray
-        The matrix representation of the CNOT gate.
-    """
-    T = np.zeros((4, 4))
-    T[0, 0] = 1
-    T[1, 1] = 1
-    T[2, 3] = 1
-    T[3, 2] = 1
-    return T
 
 
 
