@@ -1,7 +1,6 @@
 import numpy as np
 
-
-__all__ = ["ry_gate", "der_ry_gate", "cry_gate", "der_cry_gate"]
+__all__ = ["ry_gate", "der_ry_gate", "cry_gate", "der_cry_gate", "cnot_gate"]
 
 
 def ry_gate(theta):
@@ -179,3 +178,16 @@ def der_cry_gate(theta, nqubits, control, target):
 
     return RR
 
+
+def cnot_gate():
+    """
+    Computes the matrix transformation for the `CNOT` gate.
+    `T = CNOT`.
+    Returns
+    -------
+    T : ndarray
+    """
+    return np.array([[1, 0, 0, 0],
+                     [0, 1, 0, 0],
+                     [0, 0, 0, 1],
+                     [0, 0, 1, 0]])
