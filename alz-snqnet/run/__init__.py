@@ -1,5 +1,5 @@
 from .run_qiskit import *
 
 
-__all__ = ["qscgrn_model"]
+__all__ = ["alz_snqnet_model"]
 
