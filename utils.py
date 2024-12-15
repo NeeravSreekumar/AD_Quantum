@@ -1,165 +1,305 @@
+import os
+import sys
+import time
 import numpy as np
 import pandas as pd
-from ..utils import info_print
 
 
-__all__ = ["theta_init", "edges_init", "edges_to_index",
-           "matrix_multiplication", "tensor_product"]
+__all__ = ['qsc_order_gene', 'qsc_distribution',
+           'qsc_activation_ratios']
 
 
-def theta_init(genes, method="zeros",
-               activation_ratios=None):
+def _qsc_probabilities(ngenes, labels, counts, drop_zero=True):
     """
-    Initialize the values of theta given a list of genes. Genes
-    and activation ratios must be ordered decreasingly.
+    Complete the spectrum of quantum states for a given distribution of states.
     Parameters
     ----------
-    genes : list
-        The list of genes from the data set.
-    method : str
-        The initialization method for angle parameters between
-        different genes.
-        zeros : Set values to 0. (Default)
-        normal : Set values to a random number normally distributed.
-        uniform : Set values to a random number uniformally
-            distributed.
-    activation_ratios : ndarray or list
-        Activation values for the corresponding genes decreasingly
-        ordered. The gene list must follow the same order. The
-        activation ratios are use to set values in `R_y` gates on
-        the encoder layer `L_enc`.
-        `angle = 2 * arcsin(\sqrt(act_i))`
-
-        If None, then `angle = \pi / 2`.
+    ngenes : int
+        The number of genes in the Quantum GRN.
+    labels : np.array
+        The existing labels in the distribution of states.
+    counts : np.array
+        The counts for the labels in the distribution of states.
+    drop_zeros : bool
+        Flag to normalize the distributions. It set the `|0>_n` state to 0 and
+        rescale the rest of the distribution.
     Returns
     -------
-    theta : pandas series
+    probabilities: np.array
+        The complete spectrum of quantum states for the QuantumGRN model.
     """
-    ngenes = len(genes)
-    index = pd.MultiIndex.from_product([genes, genes],
-                                       names=["control", "target"])
+    length = 2 ** ngenes
+    probabilities = np.zeros(length)
 
-    if method == "zeros":
-        theta = np.zeros(shape=(ngenes**2,))
-    elif method == "normal":
-        theta = np.random.normal(0, 1, size=(ngenes**2,))
-    elif method == "uniform":
-        theta = np.random.uniform(-1, 1, size=(ngenes**2,))
+    nlabels, _ = labels.shape
+    idx = np.zeros(nlabels, dtype=int)
+    for i in range(ngenes):
+        idx = 2 * idx + labels[:, i]
 
-    sr = pd.Series(np.pi * theta, index=index)
-    flag_act = "" if activation_ratios is not None else "out"
+    probabilities[idx] = counts
+    if drop_zero:
+        probabilities[0] = 0.
 
-    if activation_ratios is not None:
-        sqrt_activation = np.sqrt(activation_ratios)
-        theta_encoder = 2 * np.arcsin(sqrt_activation)
-        for i, gene in enumerate(genes):
-            sr[gene, gene] = theta_encoder[i]
+    return probabilities / np.sum(probabilities)
 
+
+def qsc_distribution(dataframe, threshold=0, drop_zero=True):
+    """
+    Compute the observed distribution for the binarization step for the dataset
+    using the threshold values as described in the manuscript.
+    Parameters
+    ----------
+    dataframe : pd.DataFrame
+        The dataset as DataFrame object where the columns are genes and
+        rows are cells.
+    threshold : float
+        The threshold value for the binarization.
+        Default: 0
+    drop_zero : bool
+        Flag to normalize the distributions. It set the `|0>_n` state to 0 and
+        rescale the rest of the distribution.
+    Returns
+    -------
+    prob : np.array
+        The complete spectrum of the observed distribution `p_obs` for a
+        given dataset.
+    Raises
+    ------
+    ValueError
+        If dataframe is not a pd.DataFrame object.
+    """
+    if not isinstance(dataframe, pd.DataFrame):
+        raise ValueError("The dataset parameter is not a pd.DataFrame "
+                         "object")
+
+    scdata = dataframe.to_numpy().T
+    ngenes, _ = scdata.shape
+
+    labels, counts = np.unique((scdata > threshold) + 0, axis=1, \
+                               return_counts=True)
+    labels = np.flip(labels, axis=0).T
+    prob = _qsc_probabilities(ngenes, labels, counts, drop_zero)
+    info_print("The observed probability `p_obs` is calculated")
+    return prob
+
+
+def qsc_order_gene(dataframe, threshold=0):
+    """
+    Order the dataset according to the expression level of each gene from
+    largest to smallest.
+    Parameters
+    ----------
+    dataframe : pd.DataFrame
+        The dataset as DataFrame object where the columns are genes and
+        rows are cells.
+    threshold : float
+        The threshold value for the binarization.
+        Default: 0
+    Returns
+    -------
+    dataframe : pd.DataFrame
+        The ordered dataset as DataFrame object
+    Raises
+    ------
+    ValueError
+        If dataframe is not a pd.DataFrame object.
+    """
+    if not isinstance(dataframe, pd.DataFrame):
+        raise ValueError("The dataset parameter is not a pd.DataFrame "
+                         "object")
+    mask = dataframe > threshold
+    counts = mask.sum(axis=0).sort_values(ascending=False)
+    ordered_genes = counts.index.to_list()
+    info_print("The dataframe genes are ordered")
+    return dataframe[ordered_genes]
+
+
+def qsc_activation_ratios(dataframe, threshold=0):
+    """
+    Compute the activation ratios for each gene in the ordered dataset.
+    Parameters
+    ----------
+    dataframe : pd.DataFrame
+        The dataset as DataFrame object where the columns are genes and
+        rows are cells.
+    threshold : float
+        The threshold value for the binarization.
+        Default: 0
+    Returns
+    -------
+    dataframe : pd.DataFrame
+        The ordered dataset as DataFrame object
+    Raises
+    ------
+    ValueError
+        If dataframe is not a pd.DataFrame object.
+    """
+    if not isinstance(dataframe, pd.DataFrame):
+        raise ValueError("The dataset parameter is not a pd.DataFrame "
+                         "object")
+    scdata = dataframe.to_numpy().T
+    _, ncells = scdata.shape
+    info_print("Activation ratios are computed")
+    return np.sum((scdata > threshold) + 0, axis=1) / ncells
+
+
+def _qsc_labels(ngenes):
+    """
+    Retrieves a complete set of basis state in the QuantumGRN given the number
+    of genes. It is used in histogram visualization.
+    Parameters
+    ----------
+    ngenes : int
+        The number of genes for GRN modelling.
+    Returns
+    -------
+    labels : list
+        The complete set of basis state in the GRN modelling.
+    Raises
+    ------
+    TypeError
+        If the ngene parameters is not an integer.
+    """
+    if not isinstance(ngenes, int):
+        raise TypeError("The number of genes must be an integer value")
+    labels = []
+
+    for i in range(2**ngenes):
+        label = np.binary_repr(i, width=ngenes)
+        labels.append(label)
+
+    return labels
+
+
+def info_print(msg, level="I"):
+    date = time.strftime("%Y-%m-%d %H:%M:%S")
+    sys.stdout.write("{date} | {level} | {msg}\n"
+                     .format(date=date, msg=msg, level=level))
+
+
+def _print_msg(message, line_break=True):
+    if line_break:
+        sys.stdout.write(message + "\n")
     else:
-        for gene in genes:
-            sr[gene, gene] = np.pi / 2
-
-    info_print("Theta series is initialized using {method} as "
-               "method with{flag} activation values".format(
-                   method=method, flag=flag_act
-               ))
-
-    return sr
+        sys.stdout.write(message)
+    sys.stdout.flush()
 
 
-def edges_init(genes):
+class Progbar:
     """
-    Creates edges for the QuantumGRN from a gene list such that
-    the network is a fully-directed network. In the quantum
-    circuit, it means every qubits is connected to every other
-    qubit. The total number of edges is `n^2 - n`.
-    Parameters
-    ----------
-    genes : list
-        The list of genes from the data set.
-    Returns
-    -------
-    edges : dict
+    target: Total number of steps expected, None if unknown.
+    width: Progress bar width on screen
+    interval: Minimum visual progress update interval (in seconds)
+    unit_name: Display name for step counts
+    re-use from tf.keras.utils.progbar
     """
-    combinations = []
-    for g1 in genes:
-        for g2 in genes:
-            if g1 != g2:
-                combinations.append((g1, g2))
 
-    info_print("Edges for the QuantumGRN and quantum circuit are "
-                 "created for {ngenes} genes".format(ngenes=len(genes)))
+    def __init__(self, target, width=50, interval=1,
+                 unit_name="step"):
+        self.target = target
+        self.width = width
+        self.interval = interval
+        self.unit_name = unit_name
 
-    return combinations
-
-def edges_to_index(genes, edges):
-    """
-    Converts the edges dictionary (ie. edges_init) into a dictionary
-    of indexes given a gene list.
-    Parameters
-    ----------
-    genes : list
-        The list of genes from the data set.
-        [gene0, gene1, gene2, ...]
-    edges : dict
-        The list of edges with the gene name.
-        [(gene0, gene1), (gene0, gene2), ...]
-    Returns
-    -------
-    indexes = dict
-        [[0, 1], [0, 2], ...]
-    """
-    indexes = []
-
-    for edge in edges:
-        control = genes.index(edge[0])
-        target = genes.index(edge[1])
-        indexes.append([control, target])
-
-    return np.array(indexes)
+        self._dynamic_display = ((hasattr(sys.stdout, 'isatty') and
+                                  sys.stdout.isatty()) or
+                                 'ipykernel' in sys.modules or
+                                 'posix' in sys.modules or
+                                 'PYCHARM_HOSTED' in os.environ)
+        self._total_width = 0
+        self._seen_so_far = 0
+        # We use a dict + list to avoid garbage collection
+        # issues found in OrderedDict
+        self._start = time.time()
+        self._last_update = 0
+        self._time_at_epoch_start = self._start
+        self._time_at_epoch_end = None
+        self._time_after_first_step = None
 
 
-def matrix_multiplication(array):
-    """
-    Computes the matrix multiplication for a sequences of
-    transformations in a quantum circuit from left to right.
-    Given a sequence T1, T2, T3, T4
-    `T = T4 x T3 x T2 x T1`
-    Parameters
-    ----------
-    array : ndaray or list
-        The sequence of transformation by quantum gates. ie.
-        [T1, T2, T3, T4]
-    Returns
-    -------
-    T : ndarray
-    """
-    arr = None
-    for matrix in array:
-        arr = np.dot(matrix, arr) if arr is not None else matrix
+    def update(self, current, finalize=None):
+        """
+        Update the progress bar.
+        """
+        if finalize is None:
+            if self.target is None:
+                finalize = False
+            else:
+                finalize = current >= self.target
 
-    return arr
+        self._seen_so_far = current
+
+        message = ''
+        now = time.time()
+        info = ' - %.0fs' % (now - self._start)
+        if current == self.target:
+            self._time_at_epoch_end = now
+        if now - self._last_update < self.interval and not finalize:
+            return
+
+        prev_total_width = self._total_width
+        if self._dynamic_display:
+            message += '\b' * prev_total_width
+            message += '\r'
+        else:
+            message += '\n'
+
+        numdigits = int(np.log10(self.target)) + 1
+        bar = ('%' + str(numdigits) + 'd/%d [') % (current, self.target)
+        prog = float(current) / self.target
+        prog_width = int(self.width * prog)
+        if prog_width > 0:
+            bar += ('=' * (prog_width - 1))
+            if current < self.target:
+                bar += '>'
+            else:
+                bar += '='
+        bar += ('.' * (self.width - prog_width))
+        bar += ']'
+
+        self._total_width = len(bar)
+        message += bar
+
+        time_per_unit = self._estimate_step_duration(current, now)
+
+        if self.target is None or finalize:
+            info += self._format_time(time_per_unit, self.unit_name)
+        else:
+            eta = time_per_unit * (self.target - current)
+            eta_format = '%d:%02d' % (eta // 60, eta % 60)
+            info = ' - ETA: %s' % eta_format
 
 
-def tensor_product(array):
-    """
-    Computes the tensor multiplication for a given number of gates
-    in a quantum circuit consisting of `n` qubits. The inpur array
-    must follow the convention order given by Qiskit, so the result
-    would match.
-    `H = H4 (X) H3 (X) H2(X) H1`
-    Parameters
-    ----------
-    array : ndarray or list
-        The sequence of independent tranformation on each qubits. ie.
-        [H1, H2, H3, H4]
-    Returns
-    -------
-    H : ndarray
-    """
-    arr = None
-    for matrix in array:
-        arr = np.kron(matrix, arr) if arr is not None else matrix
+        self._total_width += len(info)
+        if prev_total_width > self._total_width:
+            info += (' ' * (prev_total_width - self._total_width))
 
-    return arr
+        if finalize:
+            info += '\n'
+
+        message += info
+        _print_msg(message, line_break=False)
+        message = ''
+
+    def _estimate_step_duration(self, current, now):
+        if self._time_after_first_step is not None and current > 1:
+            time_per_unit = (now - self._time_after_first_step) / (current - 1)
+        else:
+            time_per_unit = (now - self._start) / current
+
+        if current == 1:
+            self._time_after_first_step = now
+        return time_per_unit
+
+    def _format_time(self, time_per_unit, unit_name):
+        """format a given duration to display to the user."""
+        formatted = ''
+        if time_per_unit >= 1 or time_per_unit == 0:
+            formatted += ' %.0fs/%s' % (time_per_unit, unit_name)
+        elif time_per_unit >= 1e-3:
+            formatted += ' %.0fms/%s' % (time_per_unit * 1e3, unit_name)
+        else:
+            formatted += ' %.0fus/%s' % (time_per_unit * 1e6, unit_name)
+        return formatted
+
 
